@@ -5,22 +5,21 @@ import json
 import spacy
 from transformers import pipeline
 from pymongo import MongoClient
-from Crypto.Cipher import AES
-from Crypto.Random import get_random_bytes
-from bson.binary import Binary
+from cryptography.fernet import Fernet, InvalidToken
+import base64
 
 # Function to generate a random encryption key
 def generate_encryption_key():
-    return get_random_bytes(32)  # 256-bit encryption key
+    return Fernet.generate_key()
 
 # Function to save the encryption key to a file
 def save_encryption_key(key):
-    with open("encryption.txt", "wb") as file:
+    with open("encryption.key", "wb") as file:
         file.write(key)
 
 # Function to load the encryption key from a file
 def load_encryption_key():
-    with open("encryption.txt", "rb") as file:
+    with open("encryption.key", "rb") as file:
         return file.read()
 
 # Generate or load encryption key
@@ -32,45 +31,20 @@ except FileNotFoundError:
     save_encryption_key(encryption_key)
     print("New Encryption Key generated and saved to file")
 
+# Create Fernet instance with encryption key
+fernet = Fernet(encryption_key)
+
 # Function to encrypt data
 def encrypt_data(data, key):
-    cipher = AES.new(key, AES.MODE_EAX)
-    ciphertext, tag = cipher.encrypt_and_digest(data.encode())
-    return ciphertext, cipher.nonce, tag
+    return fernet.encrypt(data.encode()).decode('utf-8')
 
 # Function to decrypt data
-def decrypt_data(ciphertext, nonce, tag, key):
-    cipher = AES.new(key, AES.MODE_EAX, nonce=nonce)
-    plaintext = cipher.decrypt(ciphertext)
+def decrypt_data(ciphertext, key):
     try:
-        cipher.verify(tag)
-        return plaintext.decode()
-    except ValueError:
-        return None  # Authentication failed
-
-# Function to encrypt fields in a dictionary
-def encrypt_fields(data, key):
-    encrypted_data = {}
-    for field, value in data.items():
-        if isinstance(value, str):
-            encrypted_data[field] = encrypt_data(value, key)
-        elif isinstance(value, list):
-            encrypted_data[field] = [encrypt_data(item, key) for item in value]
-        else:
-            encrypted_data[field] = value
-    return encrypted_data
-
-# Function to decrypt fields in a dictionary
-def decrypt_fields(data, key):
-    decrypted_data = {}
-    for field, value in data.items():
-        if isinstance(value, tuple):  # Check if value is encrypted
-            decrypted_data[field] = decrypt_data(*value, key).decode('utf-8')  # Decode byte strings to UTF-8 strings
-        elif isinstance(value, list):
-            decrypted_data[field] = [decrypt_data(*item, key).decode('utf-8') if isinstance(item, tuple) else item for item in value]
-        else:
-            decrypted_data[field] = value.decode('utf-8') if isinstance(value, bytes) else value
-    return decrypted_data
+        decrypted_text = fernet.decrypt(ciphertext.encode()).decode('utf-8')
+        return decrypted_text
+    except InvalidToken:
+        return "Invalid token encountered during decryption"
 
 # Function to extract persons with context and sentiment
 def extract_persons_with_context_and_sentiment(text):
@@ -126,11 +100,11 @@ def extract_persons_with_context_and_sentiment(text):
                     sentiment = f"{sentiment_map[label]}"
 
                     # Encrypt all fields
-                    encrypted_data = encrypt_fields({
-                        "Persons": persons_in_sentence,
-                        "Context": chunk,
-                        "Sentiment": sentiment
-                    }, encryption_key)
+                    encrypted_data = {
+                        "Persons": encrypt_data(','.join(persons_in_sentence), encryption_key),
+                        "Context": encrypt_data(chunk, encryption_key),
+                        "Sentiment": encrypt_data(sentiment, encryption_key)
+                    }
 
                     # Store the encrypted data
                     persons_with_context_sentiment.append(encrypted_data)
@@ -169,4 +143,6 @@ print("Data inserted into MongoDB successfully.")
 # Decrypting and printing a sample document from the MongoDB collection
 sample_document = collection.find_one()
 print("Decrypted Sample Document:")
-print(decrypt_fields(sample_document, encryption_key))
+print("Decrypted Persons:", decrypt_data(sample_document["Persons"], encryption_key))
+print("Decrypted Context:", decrypt_data(sample_document["Context"], encryption_key))
+print("Decrypted Sentiment:", decrypt_data(sample_document["Sentiment"], encryption_key))

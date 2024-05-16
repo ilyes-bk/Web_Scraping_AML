@@ -1,0 +1,8 @@
+spacy
+transformers
+pymongo
+cryptography
+requests
+beautifulsoup4
+dateparser
+googletrans==4.0.0-rc1
